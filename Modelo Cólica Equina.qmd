@@ -1,0 +1,664 @@
+---
+title: "Modelo Cólica Equina"
+format: docx
+editor: visual
+---
+
+## Semana 2
+
+### Análise dos dados
+
+1.  Importei os dados
+
+```{r}
+data_extracao <- Sys.Date()
+pasta_raw <- file.path("data-raw", data_extracao)
+dir.create(pasta_raw, recursive = TRUE, showWarnings = FALSE)
+
+base <- "https://archive.ics.uci.edu/ml/machine-learning-databases/horse-colic/"
+ficheiros <- c("horse-colic.data", "horse-colic.test", "horse-colic.names")
+for (f in ficheiros) {
+  download.file(paste0(base, f), file.path(pasta_raw, f), mode = "wb")
+}
+
+writeLines(
+  c(paste("Data de extração:", data_extracao),
+    paste("Fonte:", base)),
+  file.path(pasta_raw, "LEIAME.txt")
+)
+
+Sys.chmod(file.path(pasta_raw, ficheiros), mode = "0444")
+cat(readLines(file.path(pasta_raw, "horse-colic.names")), sep = "\n")
+```
+
+2.  Coloquei os dados numa tabela e depois substitui para ter a resposta respetiva, segundo a informação em horse-colic.names
+
+```{r}
+colica.data <- read.table(
+  file.path(pasta_raw, "horse-colic.data"),
+  header = FALSE, na.strings = "?"
+)
+dim(colica.data)
+sum(colica.data$V23 == 2, na.rm = TRUE)
+sum(colica.data$V23 == 3, na.rm = TRUE)
+
+colica.test <- read.table(
+  file.path(pasta_raw, "horse-colic.test"),
+  header = FALSE, na.strings = "?"
+)
+dim(colica.test)
+sum(colica.test$V23 == 2, na.rm = TRUE)
+sum(colica.test$V23 == 3, na.rm = TRUE)
+
+variaveis <- c("surgery","age","hospital_number",              
+               "rectal_temperature","pulse","respiratory_rate","temp_extremities",
+               "peripheral_pulse","mucous_membranes","capillary_refill_time","pain",          
+               "peristalsis","abdominal_distension","nasogastric_tube","nasogastric_reflux",
+               "nasogastric_reflux_ph","rectal_exam_feces","abdomen","packed_cell_volume",
+               "total_protein","abdominocentesis_appearance","abdomcentesis_total_protein",
+               "outcome","surgical_lesion","lesion_1","lesion_2","lesion_3","cp_data"                        
+)
+names(colica.data)<- variaveis
+
+library(dplyr)
+
+colica.data.names<- colica.data |> mutate(
+  surgery = factor(surgery, levels = 1:2,
+                   labels = c("yes", "no")),
+  
+  age = factor(age, levels = c(1, 9),
+               labels = c("adult", "young")),
+  
+  temp_extremities = factor(temp_extremities, levels = 1:4,
+                            labels = c("normal", "warm", "cool", "cold")),
+  
+  peripheral_pulse = factor(peripheral_pulse, levels = 1:4,
+                            labels = c("normal", "increased", "reduced", "absent")),
+  
+  mucous_membranes = factor(mucous_membranes, levels = 1:6,
+                            labels = c("normal_pink", "bright_pink", "pale_pink",
+                                       "pale_cyanotic", "bright_red", "dark_cyanotic")),
+  
+  capillary_refill_time = factor(capillary_refill_time, levels = 1:2,
+                                 labels = c("<3s", ">=3s")),
+  
+  pain = factor(pain, levels = 1:5,
+                labels = c("alert_no_pain", "depressed", "intermittent_mild",
+                           "intermittent_severe", "continuous_severe")),
+  
+  peristalsis = factor(peristalsis, levels = 1:4,
+                       labels = c("hypermotile", "normal", "hypomotile", "absent")),
+  
+  abdominal_distension = factor(abdominal_distension, levels = 1:4,
+                                labels = c("none", "slight", "moderate", "severe")),
+  
+  nasogastric_tube = factor(nasogastric_tube, levels = 1:3,
+                            labels = c("none", "slight", "significant")),
+  
+  nasogastric_reflux = factor(nasogastric_reflux, levels = 1:3,
+                              labels = c("none", ">1L", "<1L")),
+  
+  rectal_exam_feces = factor(rectal_exam_feces, levels = 1:4,
+                             labels = c("normal", "increased", "decreased", "absent")),
+  
+  abdomen = factor(abdomen, levels = 1:5,
+                   labels = c("normal", "other", "firm_feces_large_intestine",
+                              "distended_small_intestine", "distended_large_intestine")),
+  
+  abdominocentesis_appearance = factor(abdominocentesis_appearance, levels = 1:3,
+                                       labels = c("clear", "cloudy", "serosanguinous")),
+  
+  outcome = factor(outcome, levels = 1:3,
+                   labels = c("lived", "died", "euthanized")),
+  
+  surgical_lesion = factor(surgical_lesion, levels = 1:2,
+                           labels = c("yes", "no")),
+  
+  cp_data = factor(cp_data, levels = 1:2,
+                   labels = c("yes", "no"))
+)
+```
+
+- Apercebi-me que em vez de 2 para o parametro age, tinham registado 9 (pelo menos foi o que presumi), se isso significasse 9 meses então já estaria enquadrado como adulto segundo a divisão em data.names
+
+- Também no parametro capilary_refill_time existem dados com o número 3 que não consta na informação de data.names e por isso vou deixá-los como sendo NA porque não sei o que pretendiam
+
+- Decidi usar como **outcome** a opção de "both" que engolba os desfechos de **morte+eutanásia** apesar de a amostra não ser grande o suficiente. Após ver alguns artigos, apenas cerca de 16% das eutanasias em cavalos foram motivados por razões financeiras e, por tal, decidi considerar, nestes dados, que os casos de eutanasia resultariam maioritariamente em casos de "morte"(Burrell et al. 2023, United Horse Coalition 2024,...)
+
+3.  Com a decisão de outcome escolhida decidi substituir na tabela previamente feita os casos de eutanásia como "died" para facilitar contagens
+
+```{r}
+library(forcats)
+colica.data.outcome <- colica.data.names |>
+  mutate(outcome = fct_collapse(outcome, died = c("died", "euthanized")))
+table(colica.data.outcome$outcome, useNA = "ifany")
+
+which(is.na(colica.data.outcome$outcome))
+```
+
+4.  Fui analisar os dados para saber a quantidade de NAs:
+
+    *Por variável*
+
+```{r}
+library(purrr)
+library(tibble)
+
+tabela_geral <- tibble(
+  variavel = names(colica.data.outcome),
+  tipo     = map_chr(colica.data.outcome, ~ class(.x)[1]),
+  n_na     = map_int(colica.data.outcome, ~ sum(is.na(.x))),
+  percent_na   = round(100 * n_na / nrow(colica.data.outcome), 1),
+  valores_observados = map_chr(colica.data.outcome, ~ {
+    if (is.factor(.x)) {
+      paste(levels(.x), collapse = " | ")
+    } else if (is.numeric(.x)) {
+      paste0(min(.x, na.rm = TRUE), " a ", max(.x, na.rm = TRUE))
+    } else ""
+  })
+)
+knitr::kable(tabela_geral)
+write.csv(tabela_geral, "tabela_geral.csv", row.names = FALSE)
+```
+
+- Na verdade, nenhum dos **possiveis preditores** tem informação 100% completa, no entanto, iniciaria por excluir logo à partida aqueles que têm mais de 30% de NAs, o que **retira** os parametros: **nasogastric_tube, nasogastric_reflux, nasogastric_reflux_ph, rectal_exam_feces, abdomen, abdominocentesis_appearance e abdominocentesis_total_protein**. Assim os candidatos a preditores descem de 20 para 13
+
+- **1 caso sem outcome**: O caso 133 correspondente ao cavalo 534572, não tem outcome, por isso, não vou considerá-lo na amostra (300-1=299)
+
+  *Por caso*
+
+```{r}
+pred_dados<- colica.data.outcome |>
+  select(hospital_number, age, rectal_temperature, pulse, respiratory_rate, temp_extremities, peripheral_pulse, mucous_membranes, capillary_refill_time, pain, peristalsis, abdominal_distension, nasogastric_tube, nasogastric_reflux, nasogastric_reflux_ph, rectal_exam_feces, abdomen, packed_cell_volume, total_protein, abdominocentesis_appearance, abdomcentesis_total_protein, outcome)
+
+na_rows <- rowSums(is.na(pred_dados))
+tabela_na_casos <- data.frame(
+  caso = seq_along(na_rows),
+  n_na = as.integer(na_rows))
+```
+
+5.  Vi quais eram os casos completos e verifiquei se eram ou não repetidos
+
+```{r}
+sum(tabela_na_casos$n_na == 0)
+which(tabela_na_casos$n_na == 0)
+casos_completos <- pred_dados[tabela_na_casos$n_na == 0, ]
+```
+
+- Nos dados haviam apenas 6 casos com a informação completa
+- Ao observar esses casos vi que o cavalo 529461 era um caso repetido e a única variável que diferia era o tipo de lesão visualizado após a cirurgia (que não seria sequer um candidato a preditor), logo este "duplicado" poderia criar um enviesamento (?)
+- Concluindo apenas haviam **5 casos completos** distintos para o efeito do modelo
+
+6.  Fui verificar todos os cavalos que se repetiam nos casos pelo seu número hospitalar
+
+```{r}
+casos_repetidos <- pred_dados |>
+  group_by(hospital_number) |>
+  filter(n() > 1) |>
+  ungroup() |>
+  arrange(hospital_number)
+sum(duplicated(pred_dados))
+casos_repetidos$hospital_number[duplicated(casos_repetidos)]
+```
+
+- Existem **16 cavalos que têm 2 casos** cada um
+- Relativamente aos 20 possíveis preditores iniciais haviam 8 casos duplicados (apenas diferem em variáveis que não me importam para o modelo como as lesões especificas)
+- Um destes é o caso anteriormente visto como completo, o 529461
+- Decidi retirar os casos de cavalos repetidos (299-16=283), o que cria um enviesamento, até porque estou a manter o caso da primeira vez que cada um desse números hospitalares aparece sem reparar se a informação seria mais pretinente na sua segunda entrada
+
+7.  Corrigi a tabela pred_dados, em que retirei todos os casos hospitalares repetidos e aquele sem outcome para ter apenas os casos utilizáveis
+
+```{r}
+dados_amostra_reduct <- colica.data.outcome |>
+  filter(!is.na(outcome)) |>                      
+  distinct(hospital_number, .keep_all = TRUE)
+nrow(dados_amostra_reduct) 
+```
+
+### Conclusões
+
+Dos dados fornecidos existem:
+
+- 1 caso sem outcome
+
+- 8 casos repetidos (não incluindo variáveis não preditoras) em 16 cavalos com 2 casos
+
+- 5 casos completos
+
+- 13 candidatos a preditores (segundo o que estabeleci de \<30% NAs)
+
+- 283 casos que vou usar como amostra
+
+A este ponto o modelo considera:
+
+- Outcome "died"+"euthanized" (que atualizei na tabela de dados para serem ambos "died")
+
+- Escolha entre 13 candidatos a preditores (segundo o cálculo pmsampsize estou a considerar utilizar apenas 4?)
+
+Depois de analisar os NAs não me parece haver propriamente um padrão para a informação em falta sem ser a frequência com que os testes são efetuados em contexto clinico, ou seja, testes como a abdominocentese acabam por não ser feitos em todos os casos de cólica e por isso reporta mais NAs nos dados. Por essa razão pareceu-me o mais indicado retirar estes da possibilidade de serem usados no modelo. Dessa maneira, se efetivamente acabar por selecionar apenas 4 preditores, parece-me adequado escolher, não só variáveis com dados mais completos, mas também aquelas que são mais rotineiramente utilizadas nos casos clínicos de cólica equina.
+
+### Enviesamentos
+
+- Os dados são relativamente antigos e as práticas clínicas e testes complementares evoluiram até agora, por isso certas variáveis podem não ter informação que "vai bater certo" com dados atualizados a aplicar ao modelo;
+
+- Há vários parâmentros de análise subjetiva (ex: dor, peristaltismo, ...) que podem diferir de MV para MV;
+
+- Enviesamento do desfecho em que decidi incluir a eutanásia como morte, quando está também associada fatores humanos;
+
+- Os dados em falta, nomeadamente em testes mais usados em casos mais graves (abdominocentese, refluxo,...) criam enviesamento, porque ao decidir excluir essas variáveis com mais de 30% de NAs posso estar a eliminar precisamente preditores potencialmente fortes para o outcome da morte, apesar de ter justificação prática;
+
+- Só há 5-6 casos completos, por isso uma análise de casos completos é inviável;
+
+- Removi os casos com o mesmo número hospitalar o que reduz ainda mais a amostra e tem alguns valores de preditores diferentes...
+
+- O tamanho da amostra é sempre inferior ao necessário para qualquer número de preditores, logo vai haver um sobreajuste (porque cada caso vai ter mais peso do que deveria).
+
+## Semana 3
+
+1.  Vou iniciar por escolher 4 preditores apoiando-me em literatura existente e sabendo que estes são testes que são praticados rotineiramente em contexto de exme físico clínico à admissão:
+
+- **pulse** (=FC): é um parametro muito consistente com muita literatura que o relaciona com o desfecho e que não tem muitos valores em falta (Straticò et al. 2022)
+
+- **packed_cell_volume**: também aparece em muitos estudos e tem apenas 9.7% NAs
+
+- **capillary_refill_time** (ou mucous_membranes mas como CRT só tem 1 parametro é mais vantajoso do que ter os 5 das mucosas): também consta na literatura
+
+- **rectal_temperature**: já foi utilizado como desvio num estudo dinamarques de 2001 e os dados de horse-colic.names dão-nos a normal temp (37.8) que posso utilizar para o desvio (Thoefner et al. 2001)
+
+  - Estas variáveis também são boas porque 1,2,4 são continuas e 2 só tem 1 parametro binário
+
+  - Também seria interessante utilizar outros preditores nomeadamente: **pain** mas esta medição é subjetiva e neste caso tem 5 parametros o que não é ideal; **nasogastric_reflux** que está entre os critérios clássicos para decidir entre tratamento médico e cirúrgico mas no ficheiro passa dos 30% de NAs, por isso ficou excluído; **total_protein** já que uma revisão (Spadari et al. 2023) aponta as proteínas plasmáticas totais pós-operatórias entre os melhores preditores de sobrevivência a curto prazo, no entanto interessar-nos-ia os dados à admissão
+
+2.  Criei uma nova tabela que contivesse os 283 casos e apenas estes 4 preditores mais o outcome
+
+    ```{r}
+    four_pred<- dados_amostra_reduct|> 
+      select(hospital_number, pulse, capillary_refill_time, rectal_temperature, packed_cell_volume, outcome)
+    ```
+
+3.  Vi se havia casos sem informação para os 4 preditores
+
+```{r}
+preditores <- c("pulse", "capillary_refill_time", "rectal_temperature", "packed_cell_volume")
+
+four_pred |>
+  mutate(n_na = rowSums(is.na(across(all_of(preditores))))) |>
+  filter(n_na == 4)
+four_pred |>
+  mutate(n_na = rowSums(is.na(across(all_of(preditores))))) |>
+  count(n_na)
+```
+
+- 5 casos (5279442, 518476, 527929, 528977, 529428) não contêm informação para os preditores que tinha escolhido por isso vou também retirá-los da amostra
+
+```{r}
+four_pred <- four_pred |>
+  mutate(n_na = rowSums(is.na(across(all_of(preditores))))) |>
+  filter(n_na < 4) |>       
+  select(-n_na)
+
+nrow(four_pred)
+```
+
+- A minha amostra reduziu para 278
+
+### Pmsampsize
+
+- Calculei o tamanho da amostra com o pacote pmsampsize, segundo o artigo disponibilizado para o outcome "death+euthanasia" (previamente tinha uniformizado como died como referi)
+
+```{r}
+library(pmsampsize)
+library(dplyr)
+
+dados_died <- four_pred |>
+  mutate(evento = as.integer(outcome %in% "died"))
+prev_died <- mean(dados_died$evento)
+n_ev_died <- sum(dados_died$evento)
+
+lnL_null_died <- prev_died * log(prev_died) + (1 - prev_died) * log(1 - prev_died)
+max_r2cs_died <- 1 - exp(2 * lnL_null_died)
+
+size_died<- pmsampsize(
+  type        = "b",            
+  csrsquared  = 0.15 * max_r2cs_died,
+  parameters  = 4,
+  prevalence  = prev_died,
+  shrinkage   = 0.9 
+)
+size_died$results_table
+```
+
+```{r}
+n_obs_died <- nrow(dados_died)
+
+res <- sapply(1:4, function(p) {
+  out <- pmsampsize(type = "b",
+                    csrsquared = 0.15 * max_r2cs_died,
+                    parameters = p,
+                    prevalence = prev_died)
+  out$sample_size
+})
+
+data.frame(parametros = 1:4, N_necessario = res) |>
+  mutate(suficiente = N_necessario <= n_obs_died)
+
+```
+
+- O pacote aplica vários critérios e escolhe o N mais exigente. Um deles, o **critério 3** pede que a proporção global de mortes (**p**) seja estimada com uma margem de erro de no máximo de 0,05 (intervalo de confiança a 95%): N = (1,96 / margem)² × p × (1 − p)
+
+- Com p ≈ 0,4 e margem = 0,05, dá os 369. Como não depende do número de preditores, tirar variáveis não me interessa
+
+- Ao inverter a fórmula que pergunta “que N preciso para ±0,05?”, pergunto “que margem tenho com o N que tenho?”
+
+```{r}
+n <- nrow(dados_died)
+prev_died
+margem <- 1.96 * sqrt(prev_died * (1 - prev_died) / n)
+margem
+binom.test(n_ev_died, n)$conf.int
+```
+
+- Com os 283 casos, a prevalência verdadeira pode andar cerca de 5,76% para cada lado da prevalência observada prev_died (Entre os 34.1% e 45.9% aproximadamente). Isto é só um pouco pior do que os 5% que são geralmente requiridos, por isso, apesar de não cumprir a regra fica perto
+
+- Invertendo a fórmula do **encolhimento** (**critério 1**): N = p / \[(S − 1) · ln(1 − R²_CS / S)\]
+
+```{r}
+n <- 278; p <- 4
+r2 <- 0.15 * max_r2cs_died
+f <- function(S) S - (1 + p / (n * log(1 - r2 / S)))
+uniroot(f, c(0.5, 0.999))$root
+```
+
+- 0.89 também está bastante perto dos 0.9 ideais
+
+- O **critério 2**, do **otimismo**, na verdade é cumprido: S₂ = R²_CS / (R²_CS + 0,05 · máx(R²_CS)) e máx(R²_CS) = 1 − exp(2·lnL_nulo)
+
+### Fazer o modelo
+
+1.  Fazer a imputação multipla (ajuda do Claude)
+
+```{r}
+library(mice)
+library(rms)
+```
+
+```{r}
+table(four_pred$outcome, useNA = "ifany")
+dados <- four_pred |>
+  mutate(evento = as.integer(outcome %in% "died"),
+         capillary_refill_time = factor(as.character(capillary_refill_time),levels = c("<3s", ">=3s"))
+  )
+table(dados$evento, useNA = "ifany")
+
+set.seed(2026)
+B <- 500
+dados_imp <- dados |> select(-any_of(c("hospital_number", "outcome")))
+```
+
+- No passo 3 do tópico semana 3 observei que tinha 190 casos completos dos 278 da mostra logo a percentagem de casos incompletos= 88/278=31,7%, no entanto vi que deveria deixar alguma "folga" para a imputação por isso assumi os 35%
+
+```{r}
+m <- 35
+imp <- mice(dados_imp, m = m, maxit = 20, seed = 2026, printFlag = FALSE)
+
+imp$loggedEvents
+plot(imp)
+densityplot(imp)
+```
+
+2.  Fazer a regressão logistica para o modelo
+
+```{r}
+form <- evento ~ pulse + capillary_refill_time + rectal_temperature + packed_cell_volume
+
+ajustes  <- with(imp, glm(evento ~ pulse + capillary_refill_time + rectal_temperature + packed_cell_volume,family = binomial))
+
+pool_fit <- pool(ajustes)
+tab <- summary(pool_fit, conf.int = TRUE, exponentiate = TRUE)
+tab <- tab[-1, ]
+
+tabela <- data.frame(
+  Variável = c("Pulso (bpm)",
+               "TRC ≥3s (vs <3s)",
+               "T retal (°C)",
+               "PCV (%)"),
+  OR        = round(tab$estimate, 2),
+  `IC 95%`  = paste0(round(tab$conf.low, 2), " – ", round(tab$conf.high, 2)),
+  p         = ifelse(tab$p.value < 0.001, "< 0,001",
+                     format(round(tab$p.value, 3), nsmall = 3, decimal.mark = ",")),
+  check.names = FALSE
+)
+
+tabela
+```
+
+3.  Validação interna por bootstrap
+
+```{r}
+val_list <- lapply(seq_len(m), \(i) {
+  d   <- complete(imp, i)
+  fit <- lrm(form, data = d, x = TRUE, y = TRUE)
+  validate(fit, B = B)
+})
+
+cols <- c("index.orig", "optimism", "index.corrected")
+med  <- Reduce(`+`, lapply(val_list, \(v) unclass(v)[, cols])) / m
+
+resultados <- rbind(
+  "AUC (C)" = c(0.5 * (med["Dxy", "index.orig"] + 1),
+                0.5 * med["Dxy", "optimism"],
+                0.5 * (med["Dxy", "index.corrected"] + 1)),
+  "Declive de calibração"    = med["Slope", ],
+  "Intercepto de calibração" = med["Intercept", ],
+  "Brier"                    = med["B", ]
+)
+colnames(resultados) <- c("aparente", "otimismo", "corrigido")
+round(resultados, 3)
+```
+
+4.  Gráfico de calibração para correção do otimismo+histograma
+
+```{r}
+pred <- sapply(seq_len(m), \(i) {
+  d   <- complete(imp, i)
+  fit <- lrm(form, data = d, x = TRUE, y = TRUE)
+  predict(fit, type = "fitted")
+})
+p_med <- rowMeans(pred)
+
+png("calibracao.png", width = 1600, height = 2200, res = 250)
+
+layout(matrix(1:2, ncol = 1), heights = c(2, 1.2))
+cal_list <- lapply(seq_len(min(m, 10)), \(i) {
+  d   <- complete(imp, i)
+  fit <- lrm(form, data = d, x = TRUE, y = TRUE)
+  calibrate(fit, B = B)
+})
+par(mar = c(0.5, 4, 1, 1), mgp = c(2.5, 0.7, 0))
+plot(NULL, xlim = c(0, 1), ylim = c(0, 1), xaxt = "n",
+     xlab = "", ylab = "Proporção observada")
+abline(0, 1, lty = 2)
+for (cal in cal_list) {
+  lines(cal[, "predy"], cal[, "calibrated.corrected"],
+        col = adjustcolor("red", alpha.f = 0.4))
+}
+
+par(mar = c(4.5, 4, 0.5, 1), mgp = c(2.5, 0.7, 0))
+h_risco <- hist(p_med, breaks = seq(0, 1, 0.05), main = "",
+                xlab = "Risco previsto", ylab = "N.º de casos", col = "grey80")
+```
+
+5.  Shrinkage
+
+```{r}
+S <- min(1, resultados["Declive de calibração", "corrigido"])
+cat("Declive de calibração corrigido (S):", round(S, 3), "\n")
+
+beta <- setNames(pool_fit$pooled$estimate, pool_fit$pooled$term)  
+if (S < 0.9) {
+  interceptos <- sapply(seq_len(m), \(i) {
+    d  <- complete(imp, i)
+    X  <- model.matrix(~ pulse + capillary_refill_time + rectal_temperature +
+                         packed_cell_volume, data = d)[, -1]
+    lp <- as.vector(X %*% beta[-1])
+    coef(glm(d$evento ~ offset(S * lp), family = binomial))[1]
+  })
+  beta_final <- c("(Intercept)" = mean(interceptos), S * beta[-1])
+} else {
+  beta_final <- beta
+}
+round(beta_final, 4)
+tabela_beta <- data.frame(
+  Termo = c("Intercept",
+            "Pulso (bpm)",
+            "TRC ≥3 s (vs <3 s)",
+            "T retal (°C)",
+            "PCV (%)"),
+  Coeficiente = round(unname(beta_final), 4),
+  OR = c(NA, round(exp(unname(beta_final[-1])), 2))
+)
+tabela_beta
+```
+
+5.  Referencias para comparação
+
+```{r}
+cat("Exatidão de 'sobrevive sempre':", round(1 - prev_died, 3), "\n")
+cat("Brier do modelo nulo (só prevalência):", round(prev_died * (1 - prev_died), 3), "\n")
+cat("Brier do modelo (corrigido):", round(resultados["Brier", "corrigido"], 3), "\n")
+```
+
+6.  Sensibilidade em casos completos
+
+```{r}
+dados_cc <- na.omit(dados_imp)
+nrow(dados_cc)   
+
+fit_cc <- lrm(form, data = dados_cc, x = TRUE, y = TRUE)
+val_cc <- validate(fit_cc, B = B)
+val_cc
+cat("AUC corrigida (casos completos):",
+    round(0.5 * (val_cc["Dxy", "index.corrected"] + 1), 3), "\n")
+```
+
+### Interpretação do modelo
+
+#### Fórmula do modelo
+
+```{r}
+risco <- function(pulso, trc, temp, pcv) {
+  logit <- 18.3766 + 0.0208 * pulso + 0.5247 * trc -
+    0.6202 * temp + 0.0687 * pcv
+  1 / (1 + exp(-logit))
+}
+```
+
+#### **Imputação múltipla**
+
+Foi necessário aplicar a imputação multipla porque só 190 dos 278 cavalos têm todos os dados para as variáveis e os apagasses para analisar apenas casos completos,  perderia 32% da amostra o que enviesaria ainda mais os resultados.
+
+Deste modo o programa *mice* preenche os valores em falta de forma lógica, fazendo-o as 35 vezes que defini, gerando 35 “versões” do conjunto de dados. Assim, a incerteza sobre os valores em falta passa para os resultados finais. Defini 35 porque a regra é que o valor de m seja igual ou maior que a % de casos incompletos (White et al. 2011).
+
+O plot(imp) mostra em cada linha colorida uma das 35 imputações. É melhor quando as linhas quase se probrepõem sem subir nem descer sistematicamente e é normal haver alguma variação nas primeiras 2 ou 3 iterações, porque o processo ainda está a iniciar.
+
+O densityplot(imp) compara os valores que existiam nos dados com os que o mice inventou, para cada variável numérica com dados em falta, sendo a linha azul os valores reais e a vermelha os imputados. É bom quando as linhas vermelhas se assemelham à azul, mas é normal e positive haver também alguma variação.
+
+#### **Regressão logística (Odds Ratio)**
+
+O ORdiz quanto aumentam as odds de morrer por cada unidade da variável.
+
+- Pulso, OR=1.02, significa que cada bpm a mais aumenta em cerca 2% a probabilidade de morte;
+
+- TRC=\>3s, OR=1.69, significa que o atraso na repleção que mostra má prefusão periférica aummenta a probabilidade de morte em cerca de 69%. No entanto neste caso não é bem assim uma vez que p=0.19 e o interval de confiança abrange 0,77–3,71 e isso significaria que tanto poderia melhorar as chances de sobrevivencia em 23%, como piorar ainda mais até 371%
+
+- T. retal, OR=0,54, significa que teoricamente por cada °C a mais, a probabilidade de morte diminui 46% e pensando até certo ponto, pode fazer sentido clínico, uma vez que temperatura baixa está muitas vezes associada a choque.  De qualquer forma o p tambem é \>0.001 (0.013)
+
+- PCV, OR=1.07, significa que a cada 1% a mais de hematócrito aumenta cerca de 7% a probabilidade de morte, valor provavelmente associado a desidratação
+
+#### **Bootstrap**
+
+O bootstrap faz uma validação interna utilizando amostras retiradas dos proprios dados aleatoriamente (fiz isso 500x) para estimar qual o otimismo do modelo para o corrigir. O valor do otimismo é a diferença entre o desempenho que o modelo mostra nos dados (aparente) e o desempenho que teria em dados novos (corrigido).
+
+A AUC (área sobre a curva) determina a capacidade de discriminar entre um cavalo que morreu e outro que sobreviveu. O modelo atribui risco mais alto ao que morreu em \~79% das vezes (ver ponto 3 de fazer o modelo). O resultado é aceitável, quase excelente segundo Hosmer et al. 2013 (0,5: sem capacidade de discriminação, 0,7 a 0,8: aceitável, 0,8 a 0,9: excelente, acima de 0,9: excecional).
+
+O declive de calibração, que mede o sobreajuste, ou seja, se as previsões são demasiado extremas, é 0,947 o que é muito perto do valor ideal de 1, logo o sobreajuste é muito pequeno.
+
+A intercepção, que deveria ser 0 para um modelo que não sub/sobrestima o risco médio, é -0.016 que é bastante perto, logo há apenas uma ligeira sobrestimação do risco (morrem menos do que o previsto).
+
+O valor de Brier é a média de todos estes erros. Quanto mais perto de 0, melhor.
+
+#### **Calibração**
+
+O gráfico de calibracao tem no eixo x o risco previsto de morte atribuido prelo meu modelo e no eixo y a fração de cavalos que efetivamente morreu Segundo o risco previsto. A linha tracejada seria uma calibração perfeita e as vermelhas são as imputações criadas, já corrigidas do otimismo pelo bootstrap feito anteriormente.
+
+O facto das linhas vermelhas estarem praticamente sobrepostas pode levar à conclusão que os resultados não irão ser afetados pelos valores em falta preenchidos por essa imputação. Estas linhas também estão relativamente perto da tracejada, o que significa que em geral, o modelo está bem calibrado e isso pode ser confirmado pela informação pobtida anteriormente do declive e da intercepção (0.947x-0.016).
+
+No entanto, observa-se alguns desvios das imputações para o ideal, dependendo da zona de risco. Em zonas derisco baixo (≈ 0,05 a 0,1) as linhas ficam um pouco abaixo da diagonal, ou seja, o modelo sobrestima ligeiramente o risco nos cavalos de risco mais baixo. Na zona entre 0,2 e 0,3, as linhas encostam à diagonal, o que mostra uma calibração quase perfeita. No risco entre ≈ 0,35 e 0,5, as linhas sobem acima da diagonal, ou seja, o modelo subestima um pouco o risco nesta zona. Na zona de risco entre 0,6 e 0,7 voltam a coincidir com a diagonal e na zona \> 0,75, o modelo sobrestima um pouco o risco nos casos mais graves.
+
+Pelo histograma confirma-se uma distribuição bimodal, que sugere que os preditores separam razoavelmente os cavalos de baixo e de alto risco. Há um vale entre 0,45 e 0,50 que corresponde à zona onde o modelo está menos seguro porque tem poucos casos, e coincide com a zona onde a calibração mostra o pequeno desvio.
+
+Este gráfico é o padrão típico de um modelo com ligeiro sobreajuste, previsões um pouco mais extremas do que a realidade nos dois lados.
+
+#### **Shrinkage (encolhimento)**
+
+O shrinkage é uma travagem nos coeficientes quando o modelo está sobreajustado. Só se aplica se o declive corrigido (S) for menor que 0,9, o que não é o meu caso porque S = 0,947.
+
+#### **Referências para comparação**
+
+O objetivo é responder à pergunta de se o meu modelo é melhor do que não ter modelo nenhum para esta situação.
+
+No Brier de modelo nulo este mede o erro das probabilidades:
+
+- Para um cavalo que morreu: erro = (1 − 0,399)² ≈ 0,361
+
+- Para um cavalo que sobreviveu: erro = (0 − 0,399)² ≈ 0,159
+
+- Média ponderada pelas proporções de cada grupo: 0,399 × 0,361 + 0,601 × 0,159 ≈ 0,24
+
+- O meu modelo erra menos do que o Brier, que não usa preditor nenhum. A melhoria é de (0,240 − 0,185) / 0,240 ≈ **23%** de redução do erro.
+
+Uma vez que o Brier corrigido do modelo (0,185) foi inferior ao do modelo nulo (0,240), o que indica que os preditores melhoram a qualidade das previsões probabilísticas face à simples prevalência.
+
+#### **Sensibilidade em casos completos**
+
+Repeti a validação só com os 190 cavalos sem NAs (casos completos), para ver se a imputação muda as conclusões. A AUC corrigida é 0,811, semelhante a 0,788 com imputação e o declive 0,923 também está perto dos 0.947 do modelo. Os intervalos Lower/Upper com os casos completos são mais largos porque são só 190 casos.
+
+Concluindo, os resultados de desempenho do modelo são consistentes com a análise em casos completos, logo a imputação não está a “inventar” o desempenho do modelo e por isso foi adequada.
+
+### **Sobre o modelo (auditoria Claude)**
+
+O modelo tem discriminação aceitável a boa, está bem calibrado, melhora claramente a previsão face a não usar preditores, e os resultados mantêm-se quando se muda a forma de tratar os dados em falta.
+
+O que isto quer dizer:
+
+- Discrimina razoavelmente bem: Separa os cavalos com maior risco dos de menor risco.
+
+- As probabilidades são fiáveis: O gráfico de calibração segue a diagonal, com pequenos desvios (ligeira subestimação entre 0,35 e 0,5 e ligeira sobrestimação nos riscos extremos), compatíveis com o declive de 0,947.
+
+- Não é preciso shrinkage: O declive corrigido (0,947) é superior a 0,9, por isso os coeficientes ficam como estão.
+
+- Vale a pena usar o modelo: O Brier de 0,185 é melhor do que o de 0,240 de dar a todos a mesma probabilidade.
+
+- É robusto: Com os 190 casos completos, a AUC corrigida foi 0,811, o declive 0,923 e o Brier 0,176, ou seja, as mesmas conclusões.
+
+Limitações a assumir:
+
+- Amostra pequena: Há apenas 111 mortes para 4 preditores. A validação mostra pouco sobreajuste, mas os intervalos de confiança são largos (por exemplo, declive entre 0,58 e 1,38 nos casos completos).
+
+- Só validação interna: O bootstrap estima o desempenho em dados semelhantes aos teus mas não garante que funcione noutras clínicas ou populações, o que exigiria validação externa.
+
+- TRC sem efeito claro: O OR de 1,69 tem IC 0,77–3,71. Foi mantido por razões clínicas, mas a sua contribuição é incerta.
+
+- Interpretação clínica a justificar: O efeito protetor da temperatura retal (OR 0,54) precisa de uma explicação fisiopatológica na discussão.
+
+- A AUC tem apenas valor pontual: Na análise com imputação não calculaste um intervalo de confiança, por isso reporta-a como estimativa.
+
+## Bibliografia
+
+doi:10.3390/vetsci9100545
+
+doi:10.3390/ani13061107
+
+doi: 10.1111/j.2042-3306.2000.tb05328.x
+
+doi: 10.1002/sim.4067
